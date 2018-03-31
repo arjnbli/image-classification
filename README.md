@@ -10,7 +10,7 @@ training set consisting of 90,000 examples.
 
 There are 200 distinct output labels. However, there are only 500 training examples per output label. As a consequence,
 image augementation is used. The image preprocessing steps involve - random flips left and right, random hue and 
-random crop. A random crop reduces the image size from (64x64x3) to (56x56*x).
+random crop. A random crop reduces the image size from (64x64x3) to (56x56x3).
 
 In order to match dimensions for residual connections, 1x1 convolutions  with stride 2 are performed.
 
