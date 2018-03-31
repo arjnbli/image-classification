@@ -429,7 +429,7 @@ def compute_cost(Yhat, Y):
     return cost
 
 def model(X_train, y_train, X_val, y_val, X_test,y_test,
-          num_iterations = 5000, batch_size = 300):
+          num_iterations = 5000, batch_size = 300,learning_rate=1e-2):
     """
     Implements a 14-layer deep residual network.
     
@@ -440,6 +440,7 @@ def model(X_train, y_train, X_val, y_val, X_test,y_test,
     y_val --  validation labels of shape (10000,200)
     X_test -- test images of shape (10000,64,64,3)
     y_test -- test labels of shape (10000,200)
+    learning_rate -- int,learning rate for the optimizer
     
     num_iterations -- number of steps of the optimization loop
     batch_size -- size of a minibatch
@@ -458,7 +459,7 @@ def model(X_train, y_train, X_val, y_val, X_test,y_test,
     
     # Backpropagation:Optimizer defined
     global_step = tf.Variable(0, trainable=False)
-    learning_rate=tf.train.exponential_decay(1e-2, global_step, 1000, 0.5, staircase=True)
+    learning_rate=tf.train.exponential_decay(learning_rate, global_step, 1000, 0.5, staircase=True)
     optimizer=tf.train.AdamOptimizer(learning_rate)
     train=optimizer.minimize(cost)
     
@@ -497,7 +498,7 @@ def model(X_train, y_train, X_val, y_val, X_test,y_test,
             else:
                  print('Iterations:%d   Training Accuracy:%g  Validation Accuracy:%g Top5:%g'%(i,train_accuracy,validation_accuracy,top5_accuracy))
             
-        if (i-improvement_iteration) > 400:
+        if (i-improvement_iteration) > 500:
             test_accuracy=sess.run(accuracy,feed_dict={x_in:X_test,y_:y_test})
             print('Test Accuracy:%g' %(test_accuracy))
             return model_parameters
