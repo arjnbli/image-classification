@@ -5,6 +5,26 @@ from scipy.misc import imread
 from random import shuffle
 
 def load_tiny_imagenet(path, dtype=np.float32):
+    
+  """
+  Load TinyImageNet
+  Arguments:
+  path -- String giving path to the directory to load.
+  dtype -- numpy datatype used to load the data.
+  
+  Returns: 
+   dictionary with the following entries:
+   class_names: A list where class_names[i] is a list of strings giving the
+   WordNet names for class i in the loaded dataset.
+   X_train: (N_tr,64,64,3) array of training images
+   y_train: (N_tr,) array of training labels
+   X_val: (N_val,64,64,3) array of validation images
+   y_val: (N_val,) array of validation labels
+   X_test: (N_test, 3, 64, 64) array of testing images.
+   y_test: (N_test,) array of test labels; if test labels are not available None
+    
+  """
+
  
  # First load wnids
   with open(os.path.join(path, 'wnids.txt'), 'r') as f:
@@ -133,6 +153,8 @@ def convertToOneHot(vector, num_classes=None):
         [[0 1 0 0 0]
          [1 0 0 0 0]
          [0 0 0 0 1]]
+                 
+
     """
 
     assert isinstance(vector, np.ndarray)
@@ -172,15 +194,19 @@ def data_shuffle(training_images,training_labels):
 
 
 
-data=load_tiny_imagenet('/tin/tiny-imagenet-200')
+#provide path to the tiny imagenet folder
+data=load_tiny_imagenet('path')
 
 
 
-
-x_t,y_t=data['X_train'],data['y_train']
+#training,validation and test sets created
+x,y=data_shuffle(data['X_train'],data['y_train'])
+x_t,y_t=x[:90000,:,:,:],y[:90000]
 x_v,y_v=data['X_val'],data['y_val']
+x_test,y_test=x[90000:,:,:,:],y[90000:]
 X_train,y_train=data_shuffle(x_t,convertToOneHot(y_t))
 X_val,y_val=data_shuffle(x_v,convertToOneHot(y_v))
+X_test,y_test=data_shuffle(x_test,convertToOneHot(y_test))
 
 
 
@@ -192,7 +218,8 @@ def filter_weights(shape):
     shape -- list with shape [filter_height,filter_width,input_channels,output_channels]
  
     Returns:
-    Tensor with the same shape as input argument and dtype "float
+    tensorflow variable with the same shape as input argument and dtype "float" and values
+    drawn from truncated normal distribution
 
     """
     
@@ -207,7 +234,8 @@ def filter_biases(shape):
     shape -- list with shape [filter_height,filter_width,input_channels,output_channels]
  
     Returns:
-    Tensor with the same shape as input argument and  and dtype "float
+    tensorflow variabe with the same shape as input argument and  and dtype "float" initialized 
+    to zero
 
     """
     init=tf.constant(0,dtype=tf.float32,shape=shape)
@@ -217,6 +245,9 @@ def filter_biases(shape):
 def batch_norm_scale():
     '''
     Initializes batch normalization scale term for each layer
+    
+    Returns:
+    tensorflow variable initialized to 1.0
     '''
     init=tf.constant(1.0,dtype=tf.float32)
     return tf.Variable(init)
@@ -224,6 +255,9 @@ def batch_norm_scale():
 def batch_norm_offset():
     '''
     Initializes batch normalization offset term for each layer
+    
+    Returns:
+    tensorflow variable initialized to 0.0
     '''
     init=tf.constant(0,dtype=tf.float32)
     return tf.Variable(init)
@@ -232,21 +266,45 @@ def convolution(inp,fil,strides,bias,scale,offset):
     """
     Performs convolution --> RELU ---> Batch Normalization
     
-    Argument:
+    Arguments:
     inp -- tensor with shape [batch_size,img_height,img_width,n_channels]
     fil -- tensor with shape [filter_height,filter_width,input_channels,output_channels]
     strides -- list, strides to be taken along each dimesnion of input image
     bias -- tensor with shape [output_channels]
     scale -- batch normalization scale term
     offset -- batch normalization offset term
+    
     Returns:
-    init_batch_normalized -- tensor
+    init_batch_normalized -- tensor obtained after one step of convolution followed by RELU followed by batch
+    normalization
     """
     init=tf.nn.conv2d(inp,fil,strides,padding='SAME',use_cudnn_on_gpu=True)+bias
     init_mean,init_variance=tf.nn.moments(init,axes=[0,1,2])
     variance_epsilon=1e-3
     init_batch_normalized=tf.nn.batch_normalization(init,init_mean,init_variance,offset,scale,variance_epsilon)
     return tf.nn.relu(init_batch_normalized)
+
+def conv_layer(inp,filter_dim,bias_dim,strides):
+    """
+    Helper function for creating a convolution layer
+    
+    Argument:
+    inp -- tensor with shape [batch_size,img_height,img_width,n_channels]
+    filter_dim -- list with entries [filter_height,filter_width,input_channels,output_channels]
+    bias_dim -- list with entries [output_channels]
+     strides -- list, strides to be taken along each dimension of input image
+    
+    Returns:
+    init_batch_normalized -- tensor obtained after one step of convolution followed by RELU followed by batch
+    normalization
+    """
+    W=filter_weights(filter_dim)
+    b=filter_biases(bias_dim)
+    scale=batch_norm_scale()
+    offset=batch_norm_offset()
+    out=convolution(inp,W,strides,b,scale,offset)
+    return W,b,scale,offset,out
+
 def create_placeholders(n_x, n_y):
     """
     Creates the placeholders for the tensorflow session.
@@ -268,14 +326,19 @@ def create_placeholders(n_x, n_y):
 
 def forward_propagation(X):
     """
-    Implements the forward propagation for the model
+    Implements forward propagation for the model
     
     Arguments:
-    X -- input dataset placeholder, of shape (batch_size,image_height,image_width,image_depth)
+    X -- input dataset placeholder of shape (batch_size,image_height,image_width,image_depth)
    
 
     Returns:
-    y_conv -- the output of the 14 layer RESNET model
+    y_conv -- tensor,the output of the 14 layer RESNET model
+    parameters -- dictionary.Contains all parameters of layers including the weights,biases,
+    batch normalization scale and offset terms denoted by W,b,scale and offset respectively.
+    In addition the weights,biases,batch normalization scale and offset terms of the layers
+    used to match dimensions for resiual connections are included.    They are denoted by 
+    W_in,b_in,scale_in and offset_in respectively
     """
     #input images are randomly flipped left or right
     d1=tf.map_fn(lambda img: tf.image.random_flip_left_right(img), X)
@@ -283,108 +346,68 @@ def forward_propagation(X):
     d2=tf.map_fn(lambda img: tf.image.random_saturation(img, 0.5, 2.0), d1)
     #random crop reduce image size from (64,64,3) to (56,56,3)
     x=tf.map_fn(lambda img: tf.random_crop(img, np.array([56, 56, 3])), d2)
-     
-    W_1=filter_weights([7,7,3,64])
-    b_1=filter_biases([64])
-    scale_1=batch_norm_scale()
-    offset_1=batch_norm_offset()
-    out_1=convolution(x,W_1,[1,2,2,1],b_1,scale_1,offset_1)
-
-    W_2=filter_weights([3,3,64,64])
-    b_2=filter_biases([64])
-    scale_2=batch_norm_scale()
-    offset_2=batch_norm_offset()
-    out_2=convolution(out_1,W_2,[1,1,1,1],b_2,scale_2,offset_2)
-
-    W_3=filter_weights([3,3,64,64])
-    b_3=filter_biases([64])
-    scale_3=batch_norm_scale()
-    offset_3=batch_norm_offset()
-    out_3=convolution(out_2,W_3,[1,1,1,1],b_3,scale_3,offset_3)
-
-    W_4=filter_weights([3,3,64,64])
-    b_4=filter_biases([64])
-    scale_4=batch_norm_scale()
-    offset_4=batch_norm_offset()
+    
+    #ResNet-14 network constructed
+    W_1,b_1,scale_1,offset_1,out_1=conv_layer(x,[7,7,3,64],[64],[1,2,2,1])
+    
+    W_2,b_2,scale_2,offset_2,out_2=conv_layer(out_1,[3,3,64,64],[64],[1,1,1,1])
+    
+    W_3,b_3,scale_3,offset_3,out_3=conv_layer(out_2,[3,3,64,64],[64],[1,1,1,1])
+    
     in_4=(out_3+out_1)
-    out_4=convolution(in_4,W_4,[1,1,1,1],b_4,scale_4,offset_4)
-
-    W_5=filter_weights([3,3,64,64])
-    b_5=filter_biases([64])
-    scale_5=batch_norm_scale()
-    offset_5=batch_norm_offset()
-    out_5=convolution(out_4,W_5,[1,1,1,1],b_5,scale_5,offset_5)
-
-    W_6=filter_weights([3,3,64,128])
-    b_6=filter_biases([128])
-    scale_6=batch_norm_scale()
-    offset_6=batch_norm_offset()
-    in_6=in_4+out_5
-    out_6=convolution(in_6,W_6,[1,2,2,1],b_6,scale_6,offset_6)
-
-    W_7=filter_weights([3,3,128,128])
-    b_7=filter_biases([128])
-    scale_7=batch_norm_scale()
-    offset_7=batch_norm_offset()  
-    out_7=convolution(out_6,W_7,[1,1,1,1],b_7,scale_7,offset_7)
-
-    W_8=filter_weights([3,3,128,128])
-    b_8=filter_biases([128])
-    scale_8=batch_norm_scale()
-    offset_8=batch_norm_offset()
-    W_in_8=filter_weights([1,1,64,128])
-    b_in_8=filter_biases([128])
-    scale_in_8=batch_norm_scale()
-    offset_in_8=batch_norm_offset()
-    in_8=out_7+convolution(in_6,W_in_8,[1,2,2,1],b_in_8,scale_in_8,offset_in_8)
-    out_8=convolution(in_8,W_8,[1,1,1,1],b_8,scale_8,offset_8)
- 
-    W_9=filter_weights([3,3,128,128])
-    b_9=filter_biases([128])
-    scale_9=batch_norm_scale()
-    offset_9=batch_norm_offset()
-    out_9=convolution(out_8,W_9,[1,1,1,1],b_9,scale_9,offset_9)
-
-    W_10=filter_weights([3,3,128,256])
-    b_10=filter_biases([256])
-    scale_10=batch_norm_scale()
-    offset_10=batch_norm_offset()
+    W_4,b_4,scale_4,offset_4,out_4=conv_layer(in_4,[3,3,64,64],[64],[1,1,1,1])
+    
+    W_5,b_5,scale_5,offset_5,out_5=conv_layer(out_4,[3,3,64,64],[64],[1,1,1,1])
+    
+    in_6=(out_5+in_4)
+    W_6,b_6,scale_6,offset_6,out_6=conv_layer(in_6,[3,3,64,128],[128],[1,2,2,1])
+    
+    W_7,b_7,scale_7,offset_7,out_7=conv_layer(out_6,[3,3,128,128],[128],[1,1,1,1])
+    
+    
+    W_in_8,b_in_8,scale_in_8,offset_in_8,out_in_8=conv_layer(in_6,[1,1,64,128],[128],[1,2,2,1])
+    in_8=(out_7+out_in_8)
+    W_8,b_8,scale_8,offset_8,out_8=conv_layer(in_8,[3,3,128,128],[128],[1,1,1,1])
+    
+    W_9,b_9,scale_9,offset_9,out_9=conv_layer(out_8,[3,3,128,128],[128],[1,1,1,1])
+    
     in_10=in_8+out_9
-    out_10=convolution(in_10,W_10,[1,2,2,1],b_10,scale_10,offset_10)
+    W_10,b_10,scale_10,offset_10,out_10=conv_layer(in_10,[3,3,128,256],[256],[1,2,2,1])
+    
+    W_11,b_11,scale_11,offset_11,out_11=conv_layer(out_10,[3,3,256,256],[256],[1,1,1,1])
+    
+    
+    W_in_12,b_in_12,scale_in_12,offset_in_12,out_in_12=conv_layer(in_10,[1,1,128,256],[256],[1,2,2,1])
+    in_12=out_11+out_in_12
+    W_12,b_12,scale_12,offset_12,out_12=conv_layer(in_12,[3,3,256,256],[256],[1,1,1,1])
+   
+    W_13,b_13,scale_13,offset_13,out_13=conv_layer(out_12,[3,3,256,256],[256],[1,1,1,1])
+   
+
  
-    W_11=filter_weights([3,3,256,256])
-    b_11=filter_biases([256])
-    scale_11=batch_norm_scale()
-    offset_11=batch_norm_offset()
-    out_11=convolution(out_10,W_11,[1,1,1,1],b_11,scale_11,offset_11)
-
-    W_12=filter_weights([3,3,256,256])
-    b_12=filter_biases([256])
-    scale_12=batch_norm_scale()
-    offset_12=batch_norm_offset()
-    W_in_12=filter_weights([1,1,128,256])
-    b_in_12=filter_biases([256])
-    scale_in_12=batch_norm_scale()
-    offset_in_12=batch_norm_offset()
-    in_12=out_11+convolution(in_10,W_in_12,[1,2,2,1],b_in_12,scale_in_12,offset_in_12)
-    out_12=convolution(in_12,W_12,[1,1,1,1],b_12,scale_12,offset_12)
-
-    W_13=filter_weights([3,3,256,256])
-    b_13=filter_biases([256])
-    scale_13=batch_norm_scale()
-    offset_13=batch_norm_offset()
-    out_13=convolution(out_12,W_13,[1,1,1,1],b_13,scale_13,offset_13)
-
+    #global average pooling
     conv_out=tf.reduce_mean((in_12+out_13),axis=[1,2])
 
 
-
+    #fully connected layer
     out_flat=tf.reshape(conv_out,[-1,256])
     W_fc=filter_weights([256,200])
     b_fc=filter_biases([200])
     y_conv=tf.matmul(out_flat,W_fc)+b_fc
     
-    return y_conv
+    #Model Parameters stored in a dictionary
+    W=[W_1,W_2,W_3,W_4,W_5,W_6,W_7,W_8,W_9,W_10,W_11,W_12,W_13,W_fc]
+    b=[b_1,b_2,b_3,b_4,b_5,b_6,b_7,b_8,b_9,b_10,b_11,b_12,b_13,b_fc]
+    scale=[scale_1,scale_2,scale_3,scale_4,scale_5,scale_6,scale_7,scale_8,scale_9,scale_10,scale_11,scale_12,scale_13]
+    offset=[offset_1,offset_2,offset_3,offset_4,offset_5,offset_6,offset_7,offset_8,offset_9,offset_10,offset_11,offset_12,offset_13]
+    W_in=[W_in_8,W_in_12]
+    b_in=[b_in_8,b_in_12]
+    scale_in=[scale_in_8,scale_in_12]
+    offset_in=[offset_in_8,offset_in_12]
+    parameters={'Weights':W,'biases':b,'batch norm scale':scale,'batch norm offset':offset,'Weights_in':W_in,'biases_in':b_in,
+               'scale_in':scale_in,'offset_in':offset_in}
+    
+    return y_conv,parameters
 
 
 def compute_cost(Yhat, Y):
@@ -405,28 +428,30 @@ def compute_cost(Yhat, Y):
        
     return cost
 
-def model(X_train, y_train, X_val, Y_val, 
-          num_iterations = 30000, batch_size = 400):
+def model(X_train, y_train, X_val, y_val, X_test,y_test,
+          num_iterations = 5000, batch_size = 300):
     """
     Implements a 14-layer deep residual network.
     
     Arguments:
-    X_train -- training set, of shape (1000000,64,64,3)
-    Y_train -- test set, of shape (1000000,200)
-    X_test -- training set, of shape (10000,64,64,3)
-    Y_test -- test set, of shape (10000,200)
+    X_train -- training images, of shape (90000,64,64,3)
+    y_train -- test labels of shape (90000,200)
+    X_val -- validation images of shape (10000,64,64,3)
+    y_val --  validation labels of shape (10000,200)
+    X_test -- test images of shape (10000,64,64,3)
+    y_test -- test labels of shape (10000,200)
     
     num_iterations -- number of steps of the optimization loop
     batch_size -- size of a minibatch
        
     Returns:
-    parameters -- parameters learnt by the model. They can then be used to predict.
+    parameters -- parameters learnt by the model.
     """
       
     # Placeholders of shape (n_x, n_y) created
     x_in,y_=create_placeholders(64,200)
     # Forward propagation
-    y_conv = forward_propagation(x_in)
+    y_conv,model_parameters = forward_propagation(x_in)
     # Cost function added to tensorflow graph
     cost = compute_cost(y_conv,y_)
     
@@ -452,22 +477,37 @@ def model(X_train, y_train, X_val, Y_val,
     #variable initializer run inside session
     sess.run(init)
         
+    best_validation_accuracy=0
+    improvement_iteration=0
     # Training Loop
     for i in range(num_iterations):
         if i%250==0:
             X_train,y_train=data_shuffle(X_train,y_train)
-        j=np.random.randint(0,250)
+        j=np.random.randint(0,300)
         X_train_batch,y_train_batch=X_train[batch_size*j:batch_size*(j+1),:,:,:],y_train[batch_size*j:batch_size*(j+1),:]
         train_dict={x_in:X_train_batch,y_:y_train_batch}
         if i%100==0:
             train_accuracy=sess.run(accuracy,feed_dict=train_dict)
             top5_accuracy=sess.run(top5,feed_dict={x_in:X_val,y_:y_val})        
             validation_accuracy=sess.run(accuracy,feed_dict={x_in:X_val,y_:y_val})
-            print('Iterations:%d   Training Accuracy:%g  Validation Accuracy:%g Top5:%g'%(i,train_accuracy,validation_accuracy,top5_accuracy))
+            if validation_accuracy > best_validation_accuracy:
+                improvement_iteration=i
+                best_validation_accuracy=validation_accuracy
+                print('Iterations:%d   Training Accuracy:%g  Validation Accuracy:%g Top5:%g*'%(i,train_accuracy,validation_accuracy,top5_accuracy))
+            else:
+                 print('Iterations:%d   Training Accuracy:%g  Validation Accuracy:%g Top5:%g'%(i,train_accuracy,validation_accuracy,top5_accuracy))
+            
+        if (i-improvement_iteration) > 400:
+            test_accuracy=sess.run(accuracy,feed_dict={x_in:X_test,y_:y_test})
+            print('Test Accuracy:%g' %(test_accuracy))
+            return model_parameters
+                
+            
         sess.run(train,feed_dict=train_dict)
+   
+    test_accuracy=sess.run(accuracy,feed_dict={x_in:X_test,y_:y_val})
+    print('Test Accuracy:%g' %(test_accuracy))
+        
+    return model_parameters
 
-        
-        
-        
-model(X_train, y_train, X_val, y_val)
-        
+resnet_14_parameters=model(X_train, y_train, X_val, y_val,X_test,y_test)        
