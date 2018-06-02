@@ -5,7 +5,7 @@ The last 4 layers have been removed because of the smaller size of images in Tin
 to (256x256x3) in ImageNet.
 
 Since the test labels are not provided, the validation set with 10,000 examples is used as the test set and 10,000 
-examples are taken from the training set to the create the test set. This gives us a training set of 90,000 examples,
+examples are taken from the training set to the create the validation set. This gives us a training set of 90,000 examples,
 a validation set of 10,000 examples and a test set of 10,000 examples.
 
 There are 200 distinct output labels. However, there are only 500 training examples per output label in the training
